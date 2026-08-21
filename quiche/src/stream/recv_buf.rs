@@ -344,6 +344,23 @@ impl RecvBuf {
         self.len
     }
 
+    // PATCH(tk-link): whether everything received so far forms a single
+    // contiguous run from `off`. A connection handoff (see `crate::handoff`)
+    // replays a stream on the importing side as one write from offset 0, so it
+    // may only be exported once the peer's retransmission has filled any hole.
+    pub(crate) fn is_contiguous(&self) -> bool {
+        let mut expected = self.off;
+
+        for buf in self.data.values() {
+            if buf.off() != expected {
+                return false;
+            }
+            expected = buf.max_off();
+        }
+
+        expected == self.len
+    }
+
     /// Returns true if the receive-side of the stream is complete.
     ///
     /// This happens when the stream's receive final size is known, and the

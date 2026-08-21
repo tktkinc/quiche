@@ -1164,6 +1164,19 @@ impl PktNumWindow {
     fn upper(&self) -> u64 {
         self.lower.saturating_add(size_of::<u128>() as u64 * 8) - 1
     }
+
+    // PATCH(tk-link): serialize/restore the replay window across a connection
+    // handoff (see `crate::handoff`). This state must transfer verbatim:
+    // `contains` treats everything below `lower` as a duplicate, so a
+    // fabricated window would silently discard genuinely-new reordered
+    // packets, and a zeroed one would re-process replays.
+    pub(crate) fn as_parts(&self) -> (u64, u128) {
+        (self.lower, self.window)
+    }
+
+    pub(crate) fn from_parts(lower: u64, window: u128) -> Self {
+        PktNumWindow { lower, window }
+    }
 }
 
 #[cfg(test)]

@@ -180,6 +180,15 @@ impl Open {
         self.alg
     }
 
+    // PATCH(tk-link): expose the raw TLS traffic secret so an established
+    // connection can be exported and reconstituted elsewhere (see
+    // `crate::handoff`). The secret is already retained for key update; this
+    // only makes it readable. `from_secret` above is the inverse and was
+    // already public.
+    pub(crate) fn secret(&self) -> &[u8] {
+        &self.secret
+    }
+
     pub fn derive_next_packet_key(&self) -> Result<Open> {
         let next_secret = derive_next_secret(self.alg, &self.secret)?;
 
@@ -261,6 +270,11 @@ impl Seal {
 
     pub fn alg(&self) -> Algorithm {
         self.alg
+    }
+
+    // PATCH(tk-link): see `Open::secret` above.
+    pub(crate) fn secret(&self) -> &[u8] {
+        &self.secret
     }
 
     pub fn derive_next_packet_key(&self) -> Result<Seal> {

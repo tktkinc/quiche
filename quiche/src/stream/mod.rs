@@ -488,6 +488,20 @@ impl<F: BufFactory> StreamMap<F> {
         self.peer_max_streams_uni = cmp::max(self.peer_max_streams_uni, v);
     }
 
+    // PATCH(tk-link): read the peer's *current* stream limits for a handoff
+    // export (see `crate::handoff`). These start at the peer's transport
+    // parameters but a MAX_STREAMS frame may have raised them since, and the
+    // imported connection must not offer the peer less credit than it was
+    // already granted. `peer_streams_left_*` cannot substitute: it subtracts
+    // locally-opened streams.
+    pub(crate) fn peer_max_streams_bidi(&self) -> u64 {
+        self.peer_max_streams_bidi
+    }
+
+    pub(crate) fn peer_max_streams_uni(&self) -> u64 {
+        self.peer_max_streams_uni
+    }
+
     /// Commits the new max_streams_bidi limit.
     pub fn update_max_streams_bidi(&mut self) {
         self.local_max_streams_bidi = self.local_max_streams_bidi_next;

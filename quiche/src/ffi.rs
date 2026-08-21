@@ -1955,7 +1955,11 @@ fn std_addr_from_c(addr: &sockaddr, addr_len: socklen_t) -> SocketAddr {
     }
 }
 
-fn std_addr_to_c(addr: &SocketAddr, out: &mut sockaddr_storage) -> socklen_t {
+// PATCH(tk-link): `pub(crate)` so `ffi_handoff` can render an address the same
+// way every other FFI entry point does. Body unchanged.
+pub(crate) fn std_addr_to_c(
+    addr: &SocketAddr, out: &mut sockaddr_storage,
+) -> socklen_t {
     let sin_port = addr.port().to_be();
 
     match addr {

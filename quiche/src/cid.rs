@@ -297,6 +297,82 @@ impl ConnectionIdentifiers {
         }
     }
 
+    // PATCH(tk-link): rebuild a `ConnectionIdentifiers` from a handoff snapshot
+    // (see `crate::handoff`). `new()` cannot be reused because it always
+    // assigns sequence number 0 to the initial SCID and starts `next_scid_seq`
+    // at 1, whereas an imported connection must keep the exact sequence
+    // numbers and reset tokens its peer already knows about — the peer
+    // validates NEW_CONNECTION_ID/RETIRE_CONNECTION_ID against them.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore(
+        scids: Vec<ConnectionIdEntry>, dcids: Vec<ConnectionIdEntry>,
+        next_scid_seq: u64, retire_prior_to: u64,
+        largest_peer_retire_prior_to: u64, largest_destination_seq: u64,
+        destination_conn_id_limit: usize, source_conn_id_limit: usize,
+        zero_length_scid: bool, zero_length_dcid: bool,
+    ) -> Result<ConnectionIdentifiers> {
+        let destination_conn_id_limit = destination_conn_id_limit.max(2);
+        let source_conn_id_limit = source_conn_id_limit.max(2);
+
+        let mut scid_iter = scids.into_iter();
+        let mut dcid_iter = dcids.into_iter();
+
+        // Both deques are "non-empty by construction", so the first entry has
+        // to go in at build time.
+        let mut scids = BoundedNonEmptyConnectionIdVecDeque::new(
+            2 * source_conn_id_limit - 1,
+            scid_iter.next().ok_or(Error::InvalidState)?,
+        );
+        for e in scid_iter {
+            scids.insert(e)?;
+        }
+
+        let mut dcids = BoundedNonEmptyConnectionIdVecDeque::new(
+            destination_conn_id_limit,
+            dcid_iter.next().ok_or(Error::InvalidState)?,
+        );
+        for e in dcid_iter {
+            dcids.insert(e)?;
+        }
+
+        Ok(ConnectionIdentifiers {
+            scids,
+            dcids,
+            retire_dcid_seqs: BoundedConnectionIdSeqSet::new(
+                destination_conn_id_limit * RETIRED_CONN_ID_LIMIT_MULTIPLIER,
+            ),
+            next_scid_seq,
+            retire_prior_to,
+            largest_peer_retire_prior_to,
+            largest_destination_seq,
+            source_conn_id_limit,
+            zero_length_scid,
+            zero_length_dcid,
+            ..Default::default()
+        })
+    }
+
+    // PATCH(tk-link): snapshot accessors for handoff export. The existing
+    // `scids_iter`/`dcids_iter` yield only the `ConnectionId`, dropping the
+    // sequence number and reset token that must survive the handoff.
+    pub(crate) fn scid_entries(&self) -> impl Iterator<Item = &ConnectionIdEntry> {
+        self.scids.iter()
+    }
+
+    pub(crate) fn dcid_entries(&self) -> impl Iterator<Item = &ConnectionIdEntry> {
+        self.dcids.iter()
+    }
+
+    pub(crate) fn snapshot_counters(&self) -> (u64, u64, u64, u64, usize) {
+        (
+            self.next_scid_seq,
+            self.retire_prior_to,
+            self.largest_peer_retire_prior_to,
+            self.largest_destination_seq,
+            self.source_conn_id_limit,
+        )
+    }
+
     /// Sets the maximum number of source connection IDs our peer allows us.
     pub fn set_source_conn_id_limit(&mut self, v: u64) {
         // Bound conn id limit so our scids queue sizing is valid.

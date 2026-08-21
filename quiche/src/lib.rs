@@ -7524,11 +7524,23 @@ impl<F: BufFactory> Connection<F> {
             .as_ref()
             .is_some_and(|conn_err| !conn_err.is_app)
         {
-            let epoch = match self.handshake.write_level() {
-                crypto::Level::Initial => packet::Epoch::Initial,
-                crypto::Level::ZeroRTT => unreachable!(),
-                crypto::Level::Handshake => packet::Epoch::Handshake,
-                crypto::Level::OneRTT => packet::Epoch::Application,
+            // PATCH(tk-link): a handed-off connection (see `crate::handoff`)
+            // carries its TLS state as a never-driven stub, so `write_level()`
+            // still answers `Initial` even though the handshake completed on
+            // the exporting side. Without this, a transport-level
+            // CONNECTION_CLOSE would be built for an epoch whose keys do not
+            // exist and never leave the host, hanging the peer until its idle
+            // timeout. Behaviour-preserving upstream: once the handshake is
+            // confirmed the write level is always OneRTT anyway.
+            let epoch = if self.handshake_confirmed {
+                packet::Epoch::Application
+            } else {
+                match self.handshake.write_level() {
+                    crypto::Level::Initial => packet::Epoch::Initial,
+                    crypto::Level::ZeroRTT => unreachable!(),
+                    crypto::Level::Handshake => packet::Epoch::Handshake,
+                    crypto::Level::OneRTT => packet::Epoch::Application,
+                }
             };
 
             if !self.handshake_confirmed {
@@ -9359,9 +9371,16 @@ mod crypto;
 mod dgram;
 #[cfg(feature = "ffi")]
 mod ffi;
+// PATCH(tk-link): C ABI for connection handoff, alongside upstream's.
+#[cfg(feature = "ffi")]
+mod ffi_handoff;
 mod flowcontrol;
 mod frame;
 pub mod h3;
+// PATCH(tk-link): connection handoff — export an established server connection
+// so another host can continue serving it. A child module of the crate root, so
+// it can reach `Connection`'s private state directly.
+pub mod handoff;
 mod minmax;
 mod packet;
 mod path;
