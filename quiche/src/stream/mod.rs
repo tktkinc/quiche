@@ -192,6 +192,12 @@ impl<F: BufFactory> StreamMap<F> {
         self.streams.get_mut(&id)
     }
 
+    // PATCH(tk-link): handoff must inspect every open stream, including ones
+    // whose acknowledged data is not readable because offset zero is missing.
+    pub(crate) fn iter(&self) -> hash_map::Iter<'_, u64, Stream<F>> {
+        self.streams.iter()
+    }
+
     /// Returns the mutable stream with the given ID if it exists, or creates
     /// a new one otherwise.
     ///

@@ -724,11 +724,12 @@ impl<F: crate::BufFactory> Connection<F> {
         // Every client-opened stream must be contiguous from offset 0, so the
         // replay on the importing side is a single write. `off_front` is 0
         // because the exporting side never reads a stream.
-        for id in self.streams.readable() {
-            if let Some(s) = self.streams.get(id) {
-                if s.recv.off_front() != 0 || !s.recv.is_contiguous() {
-                    return Err(HandoffBlocked::StreamGap);
-                }
+        // A stream whose first packet is missing is not readable, but its
+        // later bytes may already be acknowledged. Omitting it would discard
+        // data the client will never retransmit.
+        for (_, s) in self.streams.iter() {
+            if s.recv.off_front() != 0 || !s.recv.is_contiguous() {
+                return Err(HandoffBlocked::StreamGap);
             }
         }
 
@@ -810,7 +811,7 @@ impl<F: crate::BufFactory> Connection<F> {
         // Drain every client-opened stream. Consuming here is fine — the
         // connection is being destroyed — and `handoff_ready` has already
         // established that each buffer is contiguous from offset 0.
-        let ids: Vec<u64> = self.streams.readable().collect();
+        let ids: Vec<u64> = self.streams.iter().map(|(&id, _)| id).collect();
         let mut streams = Vec::with_capacity(ids.len());
         for id in ids {
             let mut data = Vec::new();
@@ -1341,6 +1342,42 @@ mod tests {
 
         let (len, fin) = pipe.client.stream_recv(4, &mut buf).unwrap();
         assert_eq!(&buf[..len], b"hello client");
+        assert!(fin);
+    }
+
+    #[test]
+    fn handoff_waits_for_an_unreadable_out_of_order_stream() {
+        let mut config = edge_config();
+        let mut backend = backend_config();
+        let mut pipe = test_utils::Pipe::with_config(&mut config).unwrap();
+        pipe.handshake().unwrap();
+        quiesce(&mut pipe);
+
+        let payload = vec![0x5a; 4096];
+        pipe.client.stream_send(0, &payload, true).unwrap();
+        let mut flight = test_utils::emit_flight(&mut pipe.client).unwrap();
+        assert!(flight.len() > 1);
+        let first = flight.remove(0);
+        test_utils::process_flight(&mut pipe.server, flight).unwrap();
+
+        // The tail and FIN are received and acknowledged, but offset zero is
+        // missing. This stream is absent from the readable iterator.
+        assert_eq!(pipe.server.readable().count(), 0);
+        let _acks = test_utils::emit_flight(&mut pipe.server).unwrap();
+        assert_eq!(
+            pipe.server.handoff_ready(),
+            Err(HandoffBlocked::StreamGap)
+        );
+
+        test_utils::process_flight(&mut pipe.server, vec![first]).unwrap();
+        let _acks = test_utils::emit_flight(&mut pipe.server).unwrap();
+        assert_eq!(pipe.server.handoff_ready(), Ok(()));
+        handoff(&mut pipe, &mut backend);
+
+        let mut received = vec![0; payload.len()];
+        let (len, fin) = pipe.server.stream_recv(0, &mut received).unwrap();
+        assert_eq!(len, payload.len());
+        assert_eq!(received, payload);
         assert!(fin);
     }
 
