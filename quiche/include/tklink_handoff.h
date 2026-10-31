@@ -38,6 +38,10 @@ extern "C" {
  * quiche_handoff_accept(). */
 uint16_t quiche_handoff_version(void);
 
+/* Advertised preferred server endpoint; negative when absent. */
+int quiche_handoff_preferred_addr(const quiche_conn *conn,
+    struct sockaddr_storage *out, socklen_t *out_len);
+
 /* Continues a connection the backbone handshook.
  *
  * `snapshot` is the HANDOFF frame's snapshot field, verbatim. The returned

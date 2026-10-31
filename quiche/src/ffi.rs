@@ -1078,7 +1078,10 @@ pub extern "C" fn quiche_conn_source_ids(
 pub extern "C" fn quiche_connection_id_iter_next(
     iter: &mut ConnectionIdIter, out: &mut *const u8, out_len: &mut size_t,
 ) -> bool {
-    if let Some(conn_id) = iter.next() {
+    // PATCH(tk-link): return storage owned by the iterator. `iter.next()`
+    // clones an owned CID and drops it at function return, dangling `out`.
+    if let Some(conn_id) = iter.cids.get(iter.index) {
+        iter.index += 1;
         let id = conn_id.as_ref();
         *out = id.as_ptr();
         *out_len = id.len();

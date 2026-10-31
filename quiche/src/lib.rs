@@ -1483,6 +1483,9 @@ where
     /// Local transport parameters.
     local_transport_params: TransportParams,
 
+    // PATCH(tk-link): bounded Initial CRYPTO capture while routing the ClientHello.
+    deferred_hello: Option<Vec<u8>>,
+
     /// TLS handshake state.
     handshake: tls::Handshake,
 
@@ -2139,6 +2142,7 @@ impl<F: BufFactory> Connection<F> {
 
             parsed_peer_transport_params: false,
 
+            deferred_hello: None,
             handshake_completed: false,
 
             handshake_done_sent: false,
@@ -7320,6 +7324,10 @@ impl<F: BufFactory> Connection<F> {
             }
         }
 
+        if let Some(p) = &peer_params.preferred_address {
+            let mut retired = SmallVec::new();
+            self.ids.new_dcid(p.cid.clone(), 1, p.reset_token, 0, &mut retired)?;
+        }
         self.process_peer_transport_params(peer_params)?;
 
         self.parsed_peer_transport_params = true;
@@ -7381,6 +7389,7 @@ impl<F: BufFactory> Connection<F> {
     ///
     /// If the connection is already established, it does nothing.
     fn do_handshake(&mut self, now: Instant) -> Result<()> {
+        if self.deferred_hello.is_some() { return Ok(()); }
         let mut ex_data = tls::ExData {
             application_protos: &self.application_protos,
 
@@ -7860,6 +7869,12 @@ impl<F: BufFactory> Connection<F> {
 
                 while let Ok((read, _)) = stream.recv.emit(&mut crypto_buf) {
                     let recv_buf = &crypto_buf[..read];
+                    if epoch == packet::Epoch::Initial {
+                        if let Some(hello) = &mut self.deferred_hello {
+                            if hello.len() + read > 65536 { return Err(Error::InvalidFrame); }
+                            hello.extend_from_slice(recv_buf);
+                        }
+                    }
                     self.handshake.provide_data(level, recv_buf)?;
                 }
 
@@ -8917,7 +8932,8 @@ pub struct TransportParams {
     pub max_datagram_frame_size: Option<u64>,
     /// Unknown peer transport parameters and values, if any.
     pub unknown_params: Option<UnknownTransportParameters>,
-    // pub preferred_address: ...,
+    /// Server endpoint offered during the handshake (RFC 9000 §9.6).
+    pub preferred_address: Option<PreferredAddress>,
 }
 
 impl Default for TransportParams {
@@ -8941,6 +8957,7 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             unknown_params: Default::default(),
+            preferred_address: None,
         }
     }
 }
@@ -9071,7 +9088,7 @@ impl TransportParams {
                         return Err(Error::InvalidTransportParam);
                     }
 
-                    // TODO: decode preferred_address
+                    tp.preferred_address = Some(PreferredAddress::decode(val.as_ref())?);
                 },
 
                 0x000e => {
@@ -9239,7 +9256,12 @@ impl TransportParams {
             TransportParams::encode_param(&mut b, 0x000c, 0)?;
         }
 
-        // TODO: encode preferred_address
+        if let Some(preferred) = &tp.preferred_address {
+            if !is_server { return Err(Error::InvalidTransportParam); }
+            let value = preferred.encode();
+            TransportParams::encode_param(&mut b, 0x000d, value.len())?;
+            b.put_bytes(&value)?;
+        }
 
         if tp.active_conn_id_limit != 2 {
             TransportParams::encode_param(
@@ -9367,6 +9389,9 @@ pub use crate::range_buf::BufFactory;
 pub use crate::range_buf::BufSplit;
 
 mod cid;
+// PATCH(tk-link): pre-handshake backend selection and preferred address.
+mod preferred;
+pub use preferred::PreferredAddress;
 mod crypto;
 mod dgram;
 #[cfg(feature = "ffi")]

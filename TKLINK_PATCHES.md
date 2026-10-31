@@ -126,3 +126,22 @@ Two supporting one-line widenings: `handoff::WIRE_VERSION` (so the C ABI can
 report the snapshot version) and `ffi::std_addr_to_c` from private to
 `pub(crate)` (so the sibling module renders addresses identically). Neither
 changes behaviour.
+
+### Optional preferred endpoint for adopted connections
+
+`quiche/src/preferred.rs` adds the RFC 9000 `preferred_address` codec, reserves
+its CID at sequence 1, and exposes a bounded Initial-CRYPTO/ClientHello gate so
+the application can select an anchor before TLS emits transport parameters.
+`lib.rs` captures reassembled ClientHello bytes only while this gate is enabled
+and registers a received preferred CID for clients. `tls/mod.rs` expands the
+transport-parameter scratch buffer to 512 bytes. The existing handoff snapshot
+carries the parameter and reserved CID without changing its wire version.
+`ffi_handoff.rs` / `include/tklink_handoff.h` expose the advertised endpoint to
+adopting Go backends so they can preserve distinct direct and VIP path addresses.
+Client migration remains an explicit application decision; merely decoding the
+parameter does not automatically move a quiche client.
+
+The direct CID demultiplexer also exercises upstream's C source-ID iterator.
+`ffi.rs` fixes its returned pointer to borrow the iterator's retained CID,
+instead of pointing into a temporary clone dropped before C can copy it.
+`sdk/go/quic/preferred_test.go` checks exact CID bytes across that boundary.

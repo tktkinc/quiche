@@ -142,3 +142,18 @@ pub extern "C" fn quiche_handoff_peek_app_data(
 pub extern "C" fn quiche_handoff_version() -> u16 {
     handoff::WIRE_VERSION
 }
+
+/// Reads the server endpoint authenticated by the original handshake, if any.
+#[no_mangle]
+pub extern "C" fn quiche_handoff_preferred_addr(
+    conn: &Connection, out: &mut sockaddr_storage, out_len: &mut socklen_t,
+) -> c_int {
+    let Some(p) = &conn.local_transport_params.preferred_address else { return -1; };
+    let addr = if p.ipv4.port() != 0 {
+        std::net::SocketAddr::V4(p.ipv4)
+    } else {
+        std::net::SocketAddr::V6(p.ipv6)
+    };
+    *out_len = crate::ffi::std_addr_to_c(&addr, out);
+    0
+}
